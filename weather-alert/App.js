@@ -14,10 +14,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 
 import useWeather from "./src/hooks/useWeather";
 import WeatherCard from "./src/components/WeatherCard";
-import {
-  askNotificationPermission,
-  registerBackgroundTask,
-} from "./src/notifications/notificationService";
+import { askNotificationPermission } from "./src/notifications/notificationService";
 
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -32,7 +29,6 @@ export default function App() {
     (async () => {
       try {
         await askNotificationPermission();
-        await registerBackgroundTask(() => Promise.resolve());
       } catch (e) {
         console.warn("Notifications setup:", e.message);
       }
@@ -106,7 +102,17 @@ export default function App() {
                     keyExtractor={(item) => item.time}
                     ItemSeparatorComponent={() => <View style={styles.sep} />}
                     contentContainerStyle={{ paddingVertical: 6 }}
-                    renderItem={({ item }) => <ForecastRow item={item} />}
+                    renderItem={({ item }) => (
+                      <ForecastRow
+                        item={item}
+                        maxRain={Math.max(
+                          0,
+                          ...forecast.map((f) =>
+                            Number.isFinite(f.precipMM) ? f.precipMM : 0
+                          )
+                        )}
+                      />
+                    )}
                     showsVerticalScrollIndicator={false}
                   />
                 </View>
@@ -131,14 +137,13 @@ export default function App() {
   );
 }
 
-/* ---------- Small pretty forecast row ---------- */
-function ForecastRow({ item }) {
+/* ---------- Pretty forecast row with rain bars ---------- */
+function ForecastRow({ item, maxRain = 1 }) {
   const temp = Math.round(item.tempC);
   const rain = Number(item.precipMM ?? 0);
   const windKmh = Math.round((item.windMS || 0) * 3.6);
 
   const chips = [];
-  if (rain >= 0.2) chips.push({ icon: "umbrella-outline", label: `${rain.toFixed(1)} mm` });
   if (windKmh >= 25) chips.push({ icon: "weather-windy", label: `${windKmh} km/h` });
 
   const iconName =
@@ -152,26 +157,38 @@ function ForecastRow({ item }) {
       ? "white-balance-sunny"
       : "weather-partly-cloudy";
 
+  const pct = Math.min(100, Math.round((rain / Math.max(maxRain, 0.1)) * 100));
+
   return (
     <View style={rowStyles.row}>
+      {/* left: time + icon */}
       <View style={rowStyles.left}>
         <MaterialCommunityIcons name={iconName} size={22} style={rowStyles.rowIcon} />
         <Text style={rowStyles.time}>{dayjs(item.time).local().format("HH:mm")}</Text>
       </View>
 
+      {/* center: temp */}
       <Text style={rowStyles.temp}>{temp}°C</Text>
 
-      <View style={rowStyles.chipsWrap}>
-        {chips.length === 0 ? (
-          <Text style={rowStyles.okChip}>OK</Text>
-        ) : (
-          chips.map((c, idx) => (
+      {/* right: rain bar + value + chips */}
+      <View style={rowStyles.right}>
+        <View style={rowStyles.rainTop}>
+          <Text style={rowStyles.rainLabel}>Rain</Text>
+          <Text style={rowStyles.rainValue}>{rain.toFixed(1)} mm</Text>
+        </View>
+
+        <View style={rowStyles.barTrack}>
+          <View style={[rowStyles.barFill, { width: `${pct}%` }]} />
+        </View>
+
+        <View style={rowStyles.chipsWrap}>
+          {chips.map((c, idx) => (
             <View key={idx} style={rowStyles.chip}>
               <MaterialCommunityIcons name={c.icon} size={14} style={rowStyles.chipIcon} />
               <Text style={rowStyles.chipText}>{c.label}</Text>
             </View>
-          ))
-        )}
+          ))}
+        </View>
       </View>
     </View>
   );
@@ -188,6 +205,7 @@ const styles = StyleSheet.create({
   titleIcon: { color: "#9cc3ff" },
   h1: { color: "#eaf0ff", fontSize: 28, fontWeight: "800", letterSpacing: 0.3 },
   sub: { color: "#98a2b3", marginTop: 4 },
+
   content: { paddingHorizontal: 16, gap: 14, flex: 1 },
   block: { borderRadius: 18, overflow: "hidden" },
 
@@ -231,7 +249,6 @@ const styles = StyleSheet.create({
   bold: { fontWeight: "800" },
 });
 
-/* Row styles */
 const rowStyles = StyleSheet.create({
   row: {
     flexDirection: "row",
@@ -244,8 +261,28 @@ const rowStyles = StyleSheet.create({
   left: { flexDirection: "row", alignItems: "center", gap: 8, width: 84 },
   rowIcon: { color: "#9ecbff" },
   time: { color: "#e6ebf7", fontWeight: "700", letterSpacing: 0.4 },
+
   temp: { color: "#e6ebf7", fontWeight: "800", width: 60, textAlign: "center" },
-  chipsWrap: { flexDirection: "row", flex: 1, flexWrap: "wrap", gap: 6, justifyContent: "flex-end" },
+
+  right: { flex: 1, marginLeft: 8 },
+
+  rainTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
+  rainLabel: { color: "#aab6c6", fontSize: 12, fontWeight: "600" },
+  rainValue: { color: "#dce7f8", fontSize: 12, fontWeight: "800" },
+
+  barTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(130,170,255,0.18)",
+    overflow: "hidden",
+  },
+  barFill: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(130,170,255,0.9)",
+  },
+
+  chipsWrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "flex-end", marginTop: 8 },
   chip: {
     flexDirection: "row",
     alignItems: "center",
@@ -259,6 +296,7 @@ const rowStyles = StyleSheet.create({
   },
   chipIcon: { color: "#b8d2ff" },
   chipText: { color: "#dbe7ff", fontSize: 12, fontWeight: "600" },
+
   okChip: {
     color: "#b7f5c9",
     backgroundColor: "rgba(80,200,120,0.15)",
