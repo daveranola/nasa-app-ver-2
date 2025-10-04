@@ -1,0 +1,30 @@
+{
+  "name": "weather-alert",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "axios": "^1.12.2",
+    "dayjs": "^1.11.18",
+    "expo": "~54.0.12",
+    "expo-background-fetch": "^14.0.7",
+    "expo-constants": "~18.0.9",
+    "expo-linear-gradient": "~15.0.7",
+    "expo-location": "^19.0.7",
+    "expo-notifications": "^0.32.12",
+    "expo-status-bar": "~3.0.8",
+    "expo-task-manager": "^14.0.7",
+    "react": "19.1.0",
+    "react-native": "0.81.4",
+    "react-native-safe-area-context": "~5.6.0"
+  },
+  "private": true,
+  "devDependencies": {
+    "react-native-dotenv": "^3.4.11"
+  }
+}
