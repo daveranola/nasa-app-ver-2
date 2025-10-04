@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState } from "react-native";
 import * as Location from "expo-location";
 import dayjs from "dayjs";
 import { getWeather } from "../services/meteomatics";
@@ -8,7 +9,10 @@ import { saveWeather, loadWeather, cacheKeyFor } from "../services/cache";
 
 // Fallback if location is denied/slow: Dublin
 const FALLBACK = { lat: 53.3501, lon: -6.2661 };
+// Auto-refresh cadence
+const POLL_MS = 5 * 60 * 1000;
 
+// Simple retry helper
 async function withRetry(fn, tries = 2) {
   let lastErr;
   for (let i = 0; i < tries; i++) {
@@ -22,46 +26,97 @@ async function withRetry(fn, tries = 2) {
   throw lastErr;
 }
 
+// Robust reverse geocoding (Expo first, web fallback)
+async function reverseGeocodeRobust(lat, lon) {
+  try {
+    const results = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
+    const r = results?.[0];
+    const city = r?.city || r?.subregion || r?.district || r?.name || r?.region || null;
+    const country = r?.country || null;
+    if (city || country) return { city, country };
+  } catch {}
+
+  try {
+    const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${encodeURIComponent(
+      lat
+    )}&longitude=${encodeURIComponent(lon)}&localityLanguage=en`;
+    const res = await fetch(url, { headers: { "User-Agent": "weather-alert-app/1.0" } });
+    if (res.ok) {
+      const j = await res.json();
+      const city =
+        j.city ||
+        j.locality ||
+        j.localityInfo?.administrative?.[0]?.name ||
+        j.principalSubdivision ||
+        null;
+      const country = j.countryName || null;
+      if (city || country) return { city, country };
+    }
+  } catch {}
+
+  return { city: null, country: null };
+}
+
 export default function useWeather() {
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState(null);
   const [current, setCurrent] = useState(null);
   const [forecast, setForecast] = useState([]);
+  const [locationInfo, setLocationInfo] = useState({
+    lat: null,
+    lon: null,
+    city: null,
+    country: null,
+  });
 
-  // Prevent double-invoke in React 18 StrictMode (dev) and re-entrancy
+  // Guards & timers
   const startedRef = useRef(false);
-
-  // Don’t re-schedule the same alert repeatedly
   const lastNotifiedISORef = useRef(null);
+  const intervalRef = useRef(null);
+  const lastFetchRef = useRef(0);
+
+  const startTimer = useCallback(() => {
+    if (intervalRef.current) return;
+    intervalRef.current = setInterval(() => {
+      // Don’t stack requests; load() itself also guards on "loading"
+      load();
+    }, POLL_MS);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stopTimer = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  }, []);
 
   const load = useCallback(async () => {
-    // Re-entrancy guard (in case refresh is spammed)
-    if (status === "loading") return;
+    if (status === "loading") return; // re-entrancy guard
 
     try {
       setStatus("loading");
       setError(null);
 
-      // Ask for permission (don’t throw if denied; we’ll fallback)
+      // Permission (don’t hard-fail; we’ll use fallback)
       await Location.requestForegroundPermissionsAsync().catch(() => null);
 
-      // 1) Use last known location immediately (fast)
+      // 1) Last known location (fast)
       let last = await Location.getLastKnownPositionAsync().catch(() => null);
       let lat = last?.coords?.latitude;
       let lon = last?.coords?.longitude;
 
-      // Show cached data instantly if we have a key
-      if (lat != null && lon != null && status === "idle") {
+      // Show cached immediately if we have something and this is first run
+      if (lat != null && lon != null && lastFetchRef.current === 0 && status === "idle") {
         const key = cacheKeyFor(lat, lon);
         const cached = await loadWeather(key);
         if (cached) {
           setCurrent(cached.current);
           setForecast(cached.forecast);
-          setStatus("done"); // instant render
+          setStatus("done");
         }
       }
 
-      // 2) Race a fresh fix, but cap to 4s so we never hang
+      // 2) Fresh fix (cap to 4s)
       try {
         const fresh = await Promise.race([
           Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
@@ -76,13 +131,18 @@ export default function useWeather() {
         }
       }
 
-      // 3) Fetch weather with 12s timeout + 1 retry
+      // Save coords + resolve city/country (don’t block network fetch)
+      setLocationInfo((prev) => ({ ...prev, lat, lon }));
+      reverseGeocodeRobust(lat, lon)
+        .then(({ city, country }) => setLocationInfo((prev) => ({ ...prev, city, country })))
+        .catch(() => {});
+
+      // 3) Weather fetch with timeout + 1 retry
       const data = await withRetry(() => getWeather(lat, lon), 2);
 
-      // Only update state if changed (tiny guard against useless re-renders)
+      // Update only when changed
       const changed =
         !current ||
-        !forecast ||
         forecast.length !== data.forecast.length ||
         current.time !== data.current.time;
 
@@ -92,22 +152,21 @@ export default function useWeather() {
         saveWeather(cacheKeyFor(lat, lon), data);
       }
 
-      // 4) Schedule the next bad-weather alert only if it’s new
+      // 4) Schedule alert once per new bad slot
       const nextBad = findNextBadWeatherSlot(data.forecast);
       if (nextBad && lastNotifiedISORef.current !== nextBad.time) {
         const assess = assessSlot(nextBad);
         const eventTime = dayjs(nextBad.time);
         const notifyAt = eventTime.subtract(1, "hour");
-
         await scheduleWeatherAlert({
           when: notifyAt,
           title: "Incoming bad weather",
           body: `${assess.reasons.join(", ")} around ${eventTime.local().format("HH:mm")}. ${assess.advice}`,
         });
-
         lastNotifiedISORef.current = nextBad.time;
       }
 
+      lastFetchRef.current = Date.now();
       setStatus("done");
     } catch (e) {
       console.log("[useWeather] load error:", e);
@@ -116,13 +175,35 @@ export default function useWeather() {
     }
   }, [status, current, forecast.length]);
 
-  // Run once on mount (guard against StrictMode double-effect)
+  // Run once on mount
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
     load();
   }, [load]);
 
-  // Expose manual refresh if you add pull-to-refresh in App.js
-  return { status, error, current, forecast, refresh: load };
+  // Start/stop the 5-min timer based on app active state
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        // If we’ve been away longer than POLL_MS, refresh immediately
+        if (Date.now() - lastFetchRef.current > POLL_MS) {
+          load();
+        }
+        startTimer();
+      } else {
+        stopTimer();
+      }
+    });
+
+    // Start timer immediately if app is already active
+    startTimer();
+
+    return () => {
+      sub.remove();
+      stopTimer();
+    };
+  }, [load, startTimer, stopTimer]);
+
+  return { status, error, current, forecast, locationInfo, refresh: load };
 }

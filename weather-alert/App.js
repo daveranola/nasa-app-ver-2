@@ -23,7 +23,7 @@ dayjs.extend(utc);
 dayjs.extend(relativeTime);
 
 export default function App() {
-  const { status, error, current, forecast } = useWeather();
+  const { status, error, current, forecast, locationInfo } = useWeather();
 
   useEffect(() => {
     (async () => {
@@ -42,6 +42,29 @@ export default function App() {
     if (status === "loading") return "Fetching your local weather…";
     return "Weather alerts an hour ahead";
   }, [status, current]);
+
+  // compute once, reused by all rows
+  const maxRain = useMemo(
+    () =>
+      Math.max(
+        0,
+        ...forecast.map((f) => (Number.isFinite(f.precipMM) ? f.precipMM : 0))
+      ),
+    [forecast]
+  );
+
+  // ✅ Build a location label from whatever we have
+  const locationLabel = useMemo(() => {
+    const parts = [
+      locationInfo?.city || null,
+      locationInfo?.country || null,
+    ].filter(Boolean);
+    if (parts.length) return parts.join(", ");
+    if (locationInfo?.lat != null && locationInfo?.lon != null) {
+      return `${Number(locationInfo.lat).toFixed(3)}, ${Number(locationInfo.lon).toFixed(3)}`;
+    }
+    return "Locating…";
+  }, [locationInfo]);
 
   return (
     <SafeAreaProvider>
@@ -62,6 +85,13 @@ export default function App() {
               />
               <Text style={styles.h1}>Weather Alert</Text>
             </View>
+
+            {/* LOCATION */}
+            <View style={styles.locPill}>
+              <MaterialCommunityIcons name="map-marker" size={16} style={styles.locIcon} />
+              <Text style={styles.locText}>{locationLabel}</Text>
+            </View>
+
             <Text style={styles.sub}>{headerSubtitle}</Text>
           </View>
 
@@ -102,16 +132,11 @@ export default function App() {
                     keyExtractor={(item) => item.time}
                     ItemSeparatorComponent={() => <View style={styles.sep} />}
                     contentContainerStyle={{ paddingVertical: 6 }}
+                    initialNumToRender={12}
+                    windowSize={8}
+                    removeClippedSubviews
                     renderItem={({ item }) => (
-                      <ForecastRow
-                        item={item}
-                        maxRain={Math.max(
-                          0,
-                          ...forecast.map((f) =>
-                            Number.isFinite(f.precipMM) ? f.precipMM : 0
-                          )
-                        )}
-                      />
+                      <ForecastRow item={item} maxRain={maxRain} />
                     )}
                     showsVerticalScrollIndicator={false}
                   />
@@ -204,6 +229,24 @@ const styles = StyleSheet.create({
   titleWrap: { flexDirection: "row", alignItems: "center", gap: 8 },
   titleIcon: { color: "#9cc3ff" },
   h1: { color: "#eaf0ff", fontSize: 28, fontWeight: "800", letterSpacing: 0.3 },
+
+  // Location pill
+  locPill: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(156,195,255,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(156,195,255,0.25)",
+  },
+  locIcon: { color: "#bcd6ff" },
+  locText: { color: "#dbe7ff", fontWeight: "700", letterSpacing: 0.2 },
+
   sub: { color: "#98a2b3", marginTop: 4 },
 
   content: { paddingHorizontal: 16, gap: 14, flex: 1 },
