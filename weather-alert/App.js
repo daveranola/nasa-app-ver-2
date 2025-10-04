@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   StatusBar,
   View,
@@ -7,6 +7,7 @@ import {
   FlatList,
   StyleSheet,
   Platform,
+  TouchableOpacity,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
@@ -14,6 +15,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 
 import useWeather from "./src/hooks/useWeather";
 import WeatherCard from "./src/components/WeatherCard";
+import PlacePicker from "./src/components/PlacePicker";
 import { askNotificationPermission } from "./src/notifications/notificationService";
 
 import dayjs from "dayjs";
@@ -23,14 +25,16 @@ dayjs.extend(utc);
 dayjs.extend(relativeTime);
 
 export default function App() {
-  const { status, error, current, forecast, locationInfo } = useWeather();
+  // NOTE: useWeather must export refreshWithCoords per earlier step
+  const { status, error, current, forecast, locationInfo, refreshWithCoords } = useWeather();
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
         await askNotificationPermission();
       } catch (e) {
-        console.warn("Notifications setup:", e.message);
+        console.warn("Notifications setup:", e?.message);
       }
     })();
   }, []);
@@ -43,7 +47,6 @@ export default function App() {
     return "Weather alerts an hour ahead";
   }, [status, current]);
 
-  // compute once, reused by all rows
   const maxRain = useMemo(
     () =>
       Math.max(
@@ -53,12 +56,9 @@ export default function App() {
     [forecast]
   );
 
-  // ✅ Build a location label from whatever we have
+  // Build a label from whatever we have (city/country or coords)
   const locationLabel = useMemo(() => {
-    const parts = [
-      locationInfo?.city || null,
-      locationInfo?.country || null,
-    ].filter(Boolean);
+    const parts = [locationInfo?.city || null, locationInfo?.country || null].filter(Boolean);
     if (parts.length) return parts.join(", ");
     if (locationInfo?.lat != null && locationInfo?.lon != null) {
       return `${Number(locationInfo.lat).toFixed(3)}, ${Number(locationInfo.lon).toFixed(3)}`;
@@ -78,19 +78,20 @@ export default function App() {
           <StatusBar barStyle="light-content" />
           <View style={styles.header}>
             <View style={styles.titleWrap}>
-              <MaterialCommunityIcons
-                name="weather-cloudy-clock"
-                size={28}
-                style={styles.titleIcon}
-              />
+              <MaterialCommunityIcons name="weather-cloudy-clock" size={28} style={styles.titleIcon} />
               <Text style={styles.h1}>Weather Alert</Text>
             </View>
 
-            {/* LOCATION */}
-            <View style={styles.locPill}>
+            {/* LOCATION (tappable) */}
+            <TouchableOpacity
+              style={styles.locPill}
+              onPress={() => setPickerOpen(true)}
+              activeOpacity={0.85}
+            >
               <MaterialCommunityIcons name="map-marker" size={16} style={styles.locIcon} />
               <Text style={styles.locText}>{locationLabel}</Text>
-            </View>
+              <MaterialCommunityIcons name="chevron-down" size={18} style={{ color: "#cfe0ff", marginLeft: 4 }} />
+            </TouchableOpacity>
 
             <Text style={styles.sub}>{headerSubtitle}</Text>
           </View>
@@ -105,11 +106,7 @@ export default function App() {
 
             {status === "error" && (
               <View style={[styles.centerCard, styles.errorCard]}>
-                <MaterialCommunityIcons
-                  name="alert-circle-outline"
-                  size={20}
-                  style={styles.errorIcon}
-                />
+                <MaterialCommunityIcons name="alert-circle-outline" size={20} style={styles.errorIcon} />
                 <Text style={styles.errorText}>Error: {error}</Text>
                 <Text style={styles.mutedSmall}>
                   Check your internet connection and Meteomatics credentials.
@@ -135,9 +132,7 @@ export default function App() {
                     initialNumToRender={12}
                     windowSize={8}
                     removeClippedSubviews
-                    renderItem={({ item }) => (
-                      <ForecastRow item={item} maxRain={maxRain} />
-                    )}
+                    renderItem={({ item }) => <ForecastRow item={item} maxRain={maxRain} />}
                     showsVerticalScrollIndicator={false}
                   />
                 </View>
@@ -157,6 +152,22 @@ export default function App() {
             )}
           </View>
         </SafeAreaView>
+
+        {/* Place Picker Modal */}
+        <PlacePicker
+          visible={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          onSelect={(place) => {
+            // place: { label, lat, lon, city, country }
+            refreshWithCoords({
+              lat: place.lat,
+              lon: place.lon,
+              city: place.city || place.label,
+              country: place.country || null,
+            });
+            setPickerOpen(false);
+          }}
+        />
       </LinearGradient>
     </SafeAreaProvider>
   );
